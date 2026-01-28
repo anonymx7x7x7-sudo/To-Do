@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Rhythm Dash – Fertig</title>
+<style>
+  body { margin:0; background:#0a0a12; overflow:hidden; }
+  canvas { display:block; }
+  #ui {
+    position:absolute; top:10px; left:50%;
+    transform:translateX(-50%);
+    color:cyan; font-family:Arial;
+    text-align:center;
+    text-shadow:0 0 8px cyan;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <span id="doubleStatus"></span>
+  Level: <span id="level">1</span> | Punkte: <span id="score">0</span> | Combo: <span id="combo">0</span> | Power-Up: <span id="power">–</span>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = innerWidth;
+canvas.height = innerHeight;
+
+// Musik
+const audio = new Audio("http://www.trudog.ch/downloads/Walen.mp3");
+audio.loop = true;
+audio.volume = 0.9;
+document.addEventListener("keydown", ()=>{if(audio.paused) audio.play();});
+document.addEventListener("mousedown", ()=>{if(audio.paused) audio.play();});
+
+// BPM & Beat
+const BPM = 120;
+const beatInterval = 60000 / BPM;
+let lastBeat = 0;
+
+// Physik & Spieler
+const gravity = 0.8;
+let speed = 8;
+let dashTime = 0;
+const maxDashTime = 30;
+const player = { x:100, y:canvas.height-160, size:40, yVel:0, grounded:false };
+let playerRotation = 0;
+
+// Doppelsprung
+let doubleJumpAvailable = false;
+let doubleJumpStart = performance.now();
+let doubleJumpTimer = 0;
+const doubleJumpInterval = 10000;
+const doubleStatusEl = document.getElementById("doubleStatus");
+
+// Objekte
+let blocks = [], spikes = [], powerUps = [];
+let frame = 0;
+
+// Punkte & Combo
+let score = 0, combo = 0, activePower = null;
+
+// UI
+const scoreEl = document.getElementById("score");
+const comboEl = document.getElementById("combo");
+const powerEl = document.getElementById("power");
+const levelEl = document.getElementById("level");
+
+// Fahne
+let flag = null;
+
+// Schweif
+let trail = [];
+const maxTrailLength = 15;
+
+// Level-Patterns
+const levels = [
+  [1,0,1,2,0,1,0,1,3,0,2,1,0,3,1,2],           
+  [2,0,1,2,0,3,1,0,2,3,1,2,0,1,3,2],           
+  [2,3,1,2,3,0,2,1,3,2,0,3,1,2,3,1,2],         
+  [2,0,3,1,2,0,1,3,2,0,2,3,1,2,0,1,3,2,1,0,3,2,1,2], 
+  [3,2,0,2,3,1,2,3,0,2,1,3,2,1,3,2,0,2,3,1,2,3,1,2,3,0,2,3] 
+];
+let currentLevel = 0;
+let beatInLevel = 0;
+
+// UI aktualisieren
+function updateUI(){
+  scoreEl.textContent = score;
+  comboEl.textContent = combo;
+  powerEl.textContent = activePower ? activePower : "–";
+  levelEl.textContent = currentLevel+1;
+  doubleStatusEl.textContent = doubleJumpAvailable ? "Ja" : "";
+}
+
+// Jump
+function jump(){
+  const now = performance.now();
+  if(player.grounded){
+    player.yVel = -15;
+    player.grounded = false;
+    playerRotation += 90;
+    handleBeatPoints(now);
+  } else if(doubleJumpAvailable){
+    player.yVel = -15;
+    playerRotation += 90;
+    doubleJumpAvailable = false;
+    doubleJumpStart = now;
+  }
+}
+
+function handleBeatPoints(now){
+  const beatWindow = 350;
+  if(Math.abs(now - lastBeat) < beatWindow){
+    combo++;
+    score += 10*combo*(activePower==="score"?2:1);
+  } else {
+    combo = 0;
+  }
+  updateUI();
+}
+
+document.addEventListener("keydown", e=>{
+  if(e.code==="Space") jump();
+  if(e.code==="ShiftLeft" && dashTime <= 0) dashTime = maxDashTime;
+});
+document.addEventListener("mousedown", jump);
+
+// Pattern spawnen
+function spawnPattern(beatIndex){
+  const pattern = levels[currentLevel];
+  const type = pattern[beatIndex % pattern.length];
+  if(type===1) blocks.push({ x: canvas.width, y: canvas.height-150, w:100, h:20 });
+  else if(type===2) blocks.push({ x: canvas.width, y: canvas.height-250, w:100, h:20 });
+  if(type===3){
+    spikes.push({ x: canvas.width, y: canvas.height-120, w:40, h:40 });
+    if(Math.random() < 0.5) spikes.push({ x: canvas.width + 60, y: canvas.height-120, w:40, h:40 });
+    if(Math.random() < 0.3) spikes.push({ x: canvas.width - 60, y: canvas.height-120, w:40, h:40 });
+  }
+  if(Math.random() < 0.2){
+    blocks.push({ x: canvas.width + 50, y: canvas.height-200, w:100, h:20 });
+    spikes.push({ x: canvas.width + 50, y: canvas.height-240, w:40, h:40 });
+  }
+}
+
+// Power-Ups
+function spawnPowerUp(){
+  powerUps.push({
+    x: canvas.width,
+    y: canvas.height-200 - Math.random()*150,
+    size:30,
+    type: Math.random()<0.5?"score":"dash"
+  });
+}
+
+// Dash Balken
+function drawDashBar(){
+  const barWidth = 200;
+  const barHeight = 20;
+  const x = canvas.width/2 - barWidth/2;
+  const y = 50;
+  ctx.fillStyle = "#333"; ctx.fillRect(x,y,barWidth,barHeight);
+  const fillWidth = (dashTime/maxDashTime)*barWidth;
+  ctx.fillStyle = "cyan"; ctx.fillRect(x,y,fillWidth,barHeight);
+  ctx.strokeStyle = "white"; ctx.lineWidth=2; ctx.strokeRect(x,y,barWidth,barHeight);
+}
+
+// Doppelsprung Balken
+function drawDoubleJumpBar(){
+  const barWidth = 200;
+  const barHeight = 20;
+  const x = canvas.width/2 - barWidth/2;
+  const y = 80;
+  ctx.fillStyle="#333"; ctx.fillRect(x,y,barWidth,barHeight);
+  const now = performance.now();
+  if(!doubleJumpAvailable) doubleJumpTimer = now-doubleJumpStart;
+  const fillWidth = doubleJumpAvailable ? barWidth : Math.min((doubleJumpTimer/doubleJumpInterval)*barWidth, barWidth);
+  ctx.fillStyle = doubleJumpAvailable ? "yellow" : "orange"; ctx.fillRect(x,y,fillWidth,barHeight);
+  ctx.strokeStyle="white"; ctx.lineWidth=2; ctx.strokeRect(x,y,barWidth,barHeight);
+}
+
+// Fahne
+function drawFlag(flag){
+    ctx.fillStyle="brown"; ctx.fillRect(flag.x,flag.y,5,flag.h);
+    ctx.fillStyle="red"; ctx.beginPath();
+    const waveHeight = 8;
+    const y0 = flag.y;
+    ctx.moveTo(flag.x + 5, y0);
+    for(let i=0;i<=40;i++){
+        const y = y0 + (i%2===0 ? 0 : waveHeight * Math.sin(Date.now()/200));
+        ctx.lineTo(flag.x+5+i, y);
+    }
+    ctx.lineTo(flag.x+45, y0+30);
+    ctx.lineTo(flag.x+5, y0+30);
+    ctx.closePath(); ctx.fill();
+}
+
+// Spielschleife
+function update(time){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(time - lastBeat > beatInterval) lastBeat = time;
+  if(Math.abs(time - lastBeat)<50){ctx.fillStyle="rgba(0,255,255,0.2)"; ctx.fillRect(0,0,canvas.width,canvas.height);}
+  ctx.fillStyle="#222"; ctx.fillRect(0,canvas.height-80,canvas.width,80);
+
+  let dashSpeed = dashTime>0?14:speed;
+  if(dashTime>0) dashTime--;
+  const currentSpeed = speed + (dashSpeed-speed)*(dashTime/maxDashTime);
+
+  // Spieler Physik
+  player.yVel += gravity; player.y += player.yVel;
+  if(player.y+player.size >= canvas.height-80){player.y=canvas.height-80-player.size;player.yVel=0;player.grounded=true;}
+
+  // Schweif
+  if(dashTime>0){trail.push({x:player.x,y:player.y,size:player.size,rotation:playerRotation}); if(trail.length>maxTrailLength) trail.shift();}
+  else trail=[];
+
+  // Schweif zeichnen
+  for(let i=0;i<trail.length;i++){
+    const t=trail[i]; ctx.save(); ctx.globalAlpha=(i+1)/trail.length*0.5;
+    ctx.translate(t.x+t.size/2,t.y+t.size/2);
+    ctx.rotate(t.rotation*Math.PI/180);
+    ctx.fillStyle="cyan"; ctx.fillRect(-t.size/2,-t.size/2,t.size,t.size);
+    ctx.restore();
+  }
+  ctx.globalAlpha=1;
+
+  // Spieler zeichnen
+  ctx.save(); ctx.translate(player.x+player.size/2,player.y+player.size/2);
+  ctx.rotate(playerRotation*Math.PI/180); ctx.fillStyle="cyan"; ctx.shadowBlur=15; ctx.shadowColor="cyan";
+  ctx.fillRect(-player.size/2,-player.size/2,player.size,player.size);
+  ctx.shadowBlur=0; ctx.restore();
+
+  // Blöcke
+  ctx.fillStyle="#00ff99";
+  blocks.forEach(b=>{b.x-=currentSpeed;ctx.fillRect(b.x,b.y,b.w,b.h);
+    if(player.x<b.x+b.w && player.x+player.size>b.x && player.y+player.size<=b.y+10 && player.y+player.size+player.yVel>=b.y){player.y=b.y-player.size;player.yVel=0;player.grounded=true;}
+  });
+
+  // Spikes
+  ctx.fillStyle="magenta";
+  spikes.forEach(s=>{s.x-=currentSpeed;
+    ctx.beginPath(); ctx.moveTo(s.x,s.y+s.h); ctx.lineTo(s.x+s.w/2,s.y); ctx.lineTo(s.x+s.w,s.y+s.h); ctx.closePath(); ctx.fill();
+    if(player.x<s.x+s.w && player.x+player.size>s.x && player.y<s.y+s.h && player.y+player.size>s.y){alert("Game Over! Punkte: "+score); location.reload();}
+  });
+
+  // Power-Ups
+  powerUps.forEach(p=>{p.x-=currentSpeed; ctx.fillStyle=p.type==="score"?"yellow":"orange"; ctx.beginPath(); ctx.arc(p.x,p.y,p.size/2,0,Math.PI*2); ctx.fill();
+    if(player.x<p.x+p.size/2 && player.x+player.size>p.x-p.size/2 && player.y<p.y+p.size/2 && player.y+player.size>p.y-p.size/2){activePower=p.type; setTimeout(()=>{activePower=null; updateUI();},5000); p.collected=true;}
+  });
+
+  blocks = blocks.filter(b=>b.x+b.w>0);
+  spikes = spikes.filter(s=>s.x+s.w>0);
+  powerUps = powerUps.filter(p=>p.x+p.size>0 && !p.collected);
+
+  // Pattern spawnen
+  const framesPerBeat = Math.round(beatInterval / (1000/60));
+  if(frame % framesPerBeat===0){spawnPattern(beatInLevel); beatInLevel++;
+    if(currentLevel>=levels.length-1 && beatInLevel>=levels[currentLevel].length-2 && !flag){flag={x:canvas.width+100,y:canvas.height-200,w:20,h:120};}
+    if(beatInLevel>=levels[currentLevel].length){currentLevel++; if(currentLevel>=levels.length){console.log("Alle Level geschafft! Punkte:"+score); location.reload();} else{beatInLevel=0;}}
+  }
+
+  // Fahne
+  if(flag){drawFlag(flag); if(player.x+player.size>flag.x && player.x<flag.x+45 && player.y+player.size>flag.y && player.y<flag.y+30){alert("Glückwunsch! Du hast die Fahne erreicht! Punkte:"+score); location.reload();}
+    flag.x-=currentSpeed;
+  }
+
+  // Doppelsprung aufladen
+  if(!doubleJumpAvailable){const now = performance.now(); doubleJumpTimer=now-doubleJumpStart; if(doubleJumpTimer>=doubleJumpInterval) doubleJumpAvailable=true;}
+
+  // Balken
+  drawDashBar(); drawDoubleJumpBar();
+
+  frame++; updateUI(); requestAnimationFrame(update);
+}
+
+update();
+</script>
+</body>
+</html>
